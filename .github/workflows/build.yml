@@ -8,16 +8,14 @@ on:
       - main
 
 jobs:
-
-
-jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -29,7 +27,7 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Extract Android project
+      - name: Extract project
         run: unzip -q translogic-source.zip
 
       - name: Set up Gradle
@@ -44,5 +42,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TranslogicII-debug-apk
+          name: TranslogicII-APK
           path: TranslogicII/app/build/outputs/apk/debug/app-debug.apk
