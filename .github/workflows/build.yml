@@ -38,7 +38,7 @@ jobs:
 
       - name: Extract project
         run: |
-          unzip -q translogic-source.zip
+          unzip -qn translogic-source.zip
           ls -la
 
       - name: Set up Gradle
