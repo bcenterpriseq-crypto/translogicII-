@@ -6,6 +6,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -35,18 +36,21 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private boolean pageReady = false;
-    private final Handler refreshHandler = new Handler(Looper.getMainLooper());
-private boolean refreshScheduled = false;
 
-private final Runnable refreshRunnable = new Runnable() {
-    @Override
-    public void run() {
-        if (webView != null) {
-            webView.reload();
-            refreshHandler.postDelayed(this, 60000);
+    private final Handler refreshHandler =
+        new Handler(Looper.getMainLooper());
+
+    private boolean refreshScheduled = false;
+
+    private final Runnable refreshRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (webView != null) {
+                webView.reload();
+                refreshHandler.postDelayed(this, 60000);
+            }
         }
-    }
-};
+    };
 
     private final String scanScript =
         "(function() {" +
@@ -56,33 +60,46 @@ private final Runnable refreshRunnable = new Runnable() {
         "var rows=table.querySelectorAll('tr');" +
         "var headerIndex=-1;" +
         "var trainIndex=-1, soIndex=-1;" +
+        "var destinationIndex=-1, locationIndex=-1;" +
+
         "for(var r=0;r<rows.length;r++) {" +
         "var cells=rows[r].querySelectorAll('th,td');" +
         "var headers=Array.from(cells).map(function(c) {" +
         "return c.innerText.trim().toLowerCase().replace(/[^a-z]/g,'');" +
         "});" +
+
         "var ti=headers.indexOf('train');" +
         "var si=headers.indexOf('so');" +
+
         "if(ti>=0 && si>=0) {" +
         "headerIndex=r;" +
         "trainIndex=ti;" +
         "soIndex=si;" +
+        "destinationIndex=headers.indexOf('destination');" +
+        "locationIndex=headers.indexOf('currentlocation');" +
         "break;" +
         "}" +
         "}" +
+
         "if(headerIndex<0)return;" +
+
         "for(var r=headerIndex+1;r<rows.length;r++) {" +
         "var cells=rows[r].querySelectorAll('td');" +
         "if(cells.length<=Math.max(trainIndex,soIndex))continue;" +
+
         "var values=Array.from(cells).map(function(c) {" +
         "return c.innerText.trim().replace(/\\s+/g,' ');" +
         "});" +
+
         "var train=values[trainIndex]||'';" +
         "var so=values[soIndex]||'';" +
         "if(!train || !so)continue;" +
+
         "result.push({" +
         "train:train," +
         "so:so," +
+        "destination:destinationIndex>=0?(values[destinationIndex]||''):''," +
+        "location:locationIndex>=0?(values[locationIndex]||''):''," +
         "details:values.join(' | ')" +
         "});" +
         "}" +
@@ -97,6 +114,7 @@ private final Runnable refreshRunnable = new Runnable() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission("android.permission.POST_NOTIFICATIONS")
             != PackageManager.PERMISSION_GRANTED) {
+
             requestPermissions(
                 new String[]{"android.permission.POST_NOTIFICATIONS"},
                 100
@@ -130,6 +148,7 @@ private final Runnable refreshRunnable = new Runnable() {
         );
 
         webView.setWebViewClient(new WebViewClient() {
+
             @Override
             public boolean shouldOverrideUrlLoading(
                 WebView view,
@@ -139,18 +158,18 @@ private final Runnable refreshRunnable = new Runnable() {
             }
 
             @Override
-public void onPageFinished(WebView view, String url) {
-    super.onPageFinished(view, url);
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
 
-    pageReady = true;
+                pageReady = true;
 
-    if (!refreshScheduled) {
-        refreshScheduled = true;
-        refreshHandler.postDelayed(refreshRunnable, 60000);
-    }
+                if (!refreshScheduled) {
+                    refreshScheduled = true;
+                    refreshHandler.postDelayed(refreshRunnable, 60000);
+                }
 
-    scanTrains();
-}
+                scanTrains();
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient());
@@ -211,30 +230,97 @@ public void onPageFinished(WebView view, String url) {
 
             JSONObject current = new JSONObject();
 
+            StringBuilder whatsappAlerts = new StringBuilder();
+
             for (int i = 0; i < records.length(); i++) {
+
                 JSONObject record = records.getJSONObject(i);
 
                 String train = record.optString("train");
                 String so = record.optString("so");
                 String details = record.optString("details");
+                String destination = record.optString("destination");
+                String location = record.optString("location");
 
                 String key = train + "|" + so;
-                current.put(key, details);
 
-                if (hasBaseline) {
-                    if (!previous.has(key)) {
+                JSONObject savedRecord = new JSONObject();
+                savedRecord.put("details", details);
+                savedRecord.put("destination", destination);
+                savedRecord.put("location", location);
+
+                current.put(key, savedRecord);
+
+                if (!hasBaseline) continue;
+
+                if (!previous.has(key)) {
+
+                    sendNotification(
+                        "New train introduced",
+                        "Train " + train + " | SO " + so
+                    );
+
+                    whatsappAlerts.append(
+                        "NEW TRAIN\nTrain: " + train +
+                        "\nSO: " + so + "\n\n"
+                    );
+
+                } else {
+
+                    Object oldValue = previous.opt(key);
+                    String oldDetails = "";
+                    String oldLocation = "";
+                    String oldDestination = "";
+
+                    boolean structuredRecord =
+                        oldValue instanceof JSONObject;
+
+                    if (structuredRecord) {
+
+                        JSONObject oldRecord = (JSONObject) oldValue;
+
+                        oldDetails = oldRecord.optString("details");
+                        oldLocation = oldRecord.optString("location");
+                        oldDestination = oldRecord.optString("destination");
+
+                    } else if (oldValue != null) {
+
+                        // Supports records saved by the previous app version.
+                        oldDetails = oldValue.toString();
+                    }
+
+                    if (!oldDetails.equals(details)) {
                         sendNotification(
-                            "New train introduced",
+                            "Train information updated",
                             "Train " + train + " | SO " + so
                         );
-                    } else {
-                        String oldDetails =
-                            previous.optString(key);
+                    }
 
-                        if (!oldDetails.equals(details)) {
-                            sendNotification(
-                                "Train information updated",
-                                "Train " + train + " | SO " + so
+                    // Compare location and destination only when
+                    // a structured previous record is available.
+                    if (structuredRecord) {
+
+                        if (!oldLocation.isEmpty() &&
+                            !location.isEmpty() &&
+                            !oldLocation.equals(location)) {
+
+                            whatsappAlerts.append(
+                                "LOCATION CHANGE\nTrain: " + train +
+                                "\nSO: " + so +
+                                "\nPrevious: " + oldLocation +
+                                "\nNew: " + location + "\n\n"
+                            );
+                        }
+
+                        if (!oldDestination.isEmpty() &&
+                            !destination.isEmpty() &&
+                            !oldDestination.equals(destination)) {
+
+                            whatsappAlerts.append(
+                                "DESTINATION CHANGE\nTrain: " + train +
+                                "\nSO: " + so +
+                                "\nPrevious: " + oldDestination +
+                                "\nNew: " + destination + "\n\n"
                             );
                         }
                     }
@@ -246,6 +332,13 @@ public void onPageFinished(WebView view, String url) {
                 .putBoolean("baseline", true)
                 .apply();
 
+            if (whatsappAlerts.length() > 0) {
+                openWhatsAppBusiness(
+                    "KENYA RAILWAYS - TRANSLOGIC ALERTS\n\n" +
+                    whatsappAlerts.toString()
+                );
+            }
+
         } catch (Exception e) {
             android.util.Log.e(
                 "Translogic",
@@ -255,8 +348,35 @@ public void onPageFinished(WebView view, String url) {
         }
     }
 
+    private void openWhatsAppBusiness(String message) {
+
+        Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.setType("text/plain");
+        intent.setPackage("com.whatsapp.w4b");
+        intent.putExtra(Intent.EXTRA_TEXT, message);
+
+        try {
+            startActivity(intent);
+
+        } catch (Exception e) {
+
+            sendNotification(
+                "WhatsApp Business unavailable",
+                "Please check that WhatsApp Business is installed."
+            );
+
+            android.util.Log.e(
+                "Translogic",
+                "Could not open WhatsApp Business",
+                e
+            );
+        }
+    }
+
     private void createNotificationChannel() {
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
             NotificationChannel channel =
                 new NotificationChannel(
                     CHANNEL_ID,
@@ -310,6 +430,7 @@ public void onPageFinished(WebView view, String url) {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
+
         if (webView != null) {
             webView.saveState(outState);
         }
@@ -325,16 +446,17 @@ public void onPageFinished(WebView view, String url) {
     }
 
     @Override
-protected void onDestroy() {
-    pageReady = false;
+    protected void onDestroy() {
 
-    refreshHandler.removeCallbacks(refreshRunnable);
+        pageReady = false;
 
-    if (webView != null) {
-        webView.destroy();
-        webView = null;
+        refreshHandler.removeCallbacks(refreshRunnable);
+
+        if (webView != null) {
+            webView.destroy();
+            webView = null;
+        }
+
+        super.onDestroy();
     }
-
-    super.onDestroy();
-}
 }
