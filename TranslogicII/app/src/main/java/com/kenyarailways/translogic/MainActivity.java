@@ -10,6 +10,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -33,6 +35,18 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private boolean pageReady = false;
+    private final Handler refreshHandler = new Handler(Looper.getMainLooper());
+private boolean refreshScheduled = false;
+
+private final Runnable refreshRunnable = new Runnable() {
+    @Override
+    public void run() {
+        if (webView != null) {
+            webView.reload();
+            refreshHandler.postDelayed(this, 60000);
+        }
+    }
+};
 
     private final String scanScript =
         "(function() {" +
@@ -125,24 +139,18 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
+public void onPageFinished(WebView view, String url) {
+    super.onPageFinished(view, url);
 
-                pageReady = true;
+    pageReady = true;
 
-                view.evaluateJavascript(
-                    "(function() {" +
-                    "if(window.trainMonitorStarted)return;" +
-                    "window.trainMonitorStarted=true;" +
-                    "setInterval(function() {" +
-                    "window.NativeMonitor.scan();" +
-                    "},60000);" +
-                    "})();",
-                    null
-                );
+    if (!refreshScheduled) {
+        refreshScheduled = true;
+        refreshHandler.postDelayed(refreshRunnable, 60000);
+    }
 
-                scanTrains();
-            }
+    scanTrains();
+}
         });
 
         webView.setWebChromeClient(new WebChromeClient());
@@ -317,14 +325,16 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onDestroy() {
-        pageReady = false;
+protected void onDestroy() {
+    pageReady = false;
 
-        if (webView != null) {
-            webView.destroy();
-            webView = null;
-        }
+    refreshHandler.removeCallbacks(refreshRunnable);
 
-        super.onDestroy();
+    if (webView != null) {
+        webView.destroy();
+        webView = null;
     }
+
+    super.onDestroy();
+}
 }
